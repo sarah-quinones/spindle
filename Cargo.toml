@@ -1,7 +1,13 @@
 [package]
 name = "spindle"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
+authors = ["sarah quiñones <sarah@veganb.tw>"]
+description = "rayon-based threadpool"
+readme = "README.md"
+repository = "https://github.com/sarah-quinones/spindle"
+license = "MIT"
+rust-version = "1.84.0"
 
 [dependencies]
 aarc = "0.3.2"
