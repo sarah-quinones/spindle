@@ -1,4 +1,3 @@
-use Ordering::*;
 use barrier::Barrier;
 use barrier::BarrierInit;
 use barrier::ExitStatus;
@@ -13,8 +12,9 @@ use std::mem::MaybeUninit;
 use std::panic::RefUnwindSafe;
 use std::panic::UnwindSafe;
 use std::ptr::{null, null_mut};
-use std::sync::Arc;
 use std::sync::atomic::*;
+use std::sync::Arc;
+use Ordering::*;
 
 use equator::assert;
 
@@ -232,6 +232,10 @@ pub fn with_lock<R: Send>(max_threads: usize, f: impl Send + FnOnce() -> R) -> R
             f()
         })
     } else {
+        if !WORKER.get() {
+            return f();
+        }
+
         let womanager = aarc::Arc::new((AtomicUsize::new(n_threads - 1), womanager));
         let root = unsafe { &*root };
 
@@ -580,6 +584,10 @@ fn for_each_raw_imp(n_jobs: usize, task: &(dyn Sync + Fn(usize))) {
                             .leader
                             .wait_and_clear(&womanager.worker.task);
                         womanager.waker.store(0, Relaxed);
+
+                        if womanager.worker.panic_slot.load(Relaxed).is_null() {
+                            std::panic::resume_unwind(storage.assume_init());
+                        }
                     }
                 }
             }
