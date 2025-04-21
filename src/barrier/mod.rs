@@ -28,10 +28,10 @@ impl BarrierInit {
         })
     }
 
-    #[inline(never)]
-    pub fn barrier(self: &Arc<Self>, thread_id: usize) -> Barrier {
+    #[inline]
+    pub fn barrier(this: &Arc<Self>, thread_id: usize) -> Barrier {
         loop {
-            let data = self.data.load(Acquire);
+            let data = this.data.load(Acquire);
             let max = (data >> 16) & MASK;
             if max == MASK {
                 panic!();
@@ -41,21 +41,21 @@ impl BarrierInit {
                 continue;
             }
 
-            match self
+            match this
                 .data
                 .compare_exchange(data, data + (1u32 | (1u32 << 16)), Release, Relaxed)
             {
                 Ok(_) => {
                     return Barrier {
                         local_sense: SyncUnsafeCell::new(data >> 31 != 0),
-                        init: self.clone(),
+                        init: this.clone(),
                         thread_id,
                     };
                 }
                 _ => {}
             }
 
-            core::hint::spin_loop();
+            mock::spin_loop();
         }
     }
 
@@ -81,8 +81,17 @@ pub enum ExitStatus {
 impl Barrier {
     #[inline(always)]
     fn wait_imp(&self, ptr: Option<&AtomicPtr<*const TaskInner>>, exit: Exit) -> ExitStatus {
-        let local_sense = !(unsafe { *self.local_sense.get() });
-        unsafe { *self.local_sense.get() = local_sense };
+        #[cfg(loom)]
+        let local_sense = !self.local_sense.0.with(|x| unsafe { *x });
+        #[cfg(loom)]
+        self.local_sense.0.with_mut(|x| unsafe { *x = local_sense });
+
+        #[cfg(not(loom))]
+        let local_sense = !(unsafe { *self.local_sense.0.get() });
+        #[cfg(not(loom))]
+        unsafe {
+            *self.local_sense.0.get() = local_sense
+        };
 
         let dec = if matches!(exit, Exit::Exit) {
             1 | (1 << 16)
@@ -109,7 +118,7 @@ impl Barrier {
 
             let val = max | (max << 16) | ((local_sense as u32) << 31);
             self.init.data.store(val, Release);
-            atomic_wait::wake_all(&self.init.data);
+            atomic_wait_imp::wake_all(&self.init.data);
 
             if matches!(exit, Exit::Exit) {
                 ExitStatus::Exit
@@ -121,7 +130,7 @@ impl Barrier {
         } else {
             let mut spin = 0u32;
             let max_pause = PAUSE_LIMIT.load(Relaxed);
-            let max_spin = SPIN_LIMIT.load(Relaxed) / max_pause;
+            let max_spin = SPIN_LIMIT.load(Relaxed) / Ord::max(1, max_pause);
 
             loop {
                 let data = self.init.data.load(Acquire);
@@ -143,11 +152,11 @@ impl Barrier {
 
                 if spin < max_spin {
                     for _ in 0..max_pause {
-                        core::hint::spin_loop();
+                        mock::spin_loop();
                     }
                     spin += 1;
                 } else {
-                    atomic_wait::wait(&self.init.data, data);
+                    atomic_wait_imp::wait(&self.init.data, data);
                 }
             }
         }
