@@ -396,12 +396,15 @@ fn worker_loop(womanager: &Womanager) {
             for (i, used) in womanager.worker.thread_id_used.iter().enumerate() {
                 let val = used.load(Acquire);
                 let trailing = val.trailing_ones();
+                if trailing == 32 {
+                    continue;
+                }
+
                 let bit = 1u32 << trailing;
-                if trailing < 32 {
-                    if used.fetch_or(bit, AcqRel) & bit == 0 {
-                        thread_id = 32 * i + trailing as usize;
-                        break 'register;
-                    }
+                let pos = 32 * i + trailing as usize;
+                if pos < womanager.n_threads && used.fetch_or(bit, AcqRel) & bit == 0 {
+                    thread_id = pos;
+                    break 'register;
                 }
             }
         }
