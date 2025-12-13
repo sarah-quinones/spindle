@@ -606,7 +606,14 @@ fn for_each_raw_imp(n_jobs: usize, task: &(dyn Sync + Fn(usize))) {
 					};
 
 					let mut storage = MaybeUninit::uninit();
-					let mut task = (&raw const task) as *const TaskInner;
+					// SAFETY: The barrier mechanism (`wait_and_clear`) guarantees that all worker
+					// threads complete their work before this scope exits and `task` is dropped.
+					// The `task` closure lives on the stack until `wait_and_clear` returns, and
+					// all workers access it only while the barrier holds them synchronized.
+					// Using transmute here is necessary because Rust 1.94+ (see rust-lang/rust#141402)
+					// forbids raw pointer casts that extend trait object lifetimes.
+					let task_ref: &(dyn Sync + Fn(usize, &AtomicPtr<PanicLoad>)) = &task;
+					let mut task: *const TaskInner = std::mem::transmute(task_ref as *const _);
 					{
 						womanager.waker.store(1, Relaxed);
 						let n_threads = womanager.n_threads;
