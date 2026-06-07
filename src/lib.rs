@@ -41,7 +41,19 @@ mod atomic_wait_imp {
 	}
 }
 
-#[cfg(not(loom))]
+#[cfg(all(not(loom), target_family = "wasm"))]
+mod atomic_wait_imp {
+	use core::sync::atomic::AtomicU32;
+	// On wasm targets there is no blocking futex available (and blocking is
+	// forbidden on the browser main thread). `wait` is documented to allow
+	// spurious returns, so a no-op is a valid implementation: callers must
+	// recheck their condition in a loop. With rayon reporting a single
+	// thread on wasm, no workers are spawned and these paths are idle.
+	pub fn wake_all(_atomic: *const AtomicU32) {}
+	pub fn wait(_atomic: &AtomicU32, _value: u32) {}
+}
+
+#[cfg(all(not(loom), not(target_family = "wasm")))]
 mod atomic_wait_imp {
 	pub use atomic_wait::{wait, wake_all};
 }
