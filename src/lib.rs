@@ -356,7 +356,9 @@ pub fn with_lock<R: Send>(max_threads: usize, f: impl Send + FnOnce() -> R) -> R
 			root.children_thread_requests.fetch_sub(places_not_filled, Relaxed);
 
 			barrier.wait();
-			while root.children[idx].count.load(Acquire) > 1 {}
+			while root.children[idx].count.load(Acquire) > 1 {
+				mock::spin_loop();
+			}
 			assert!((womanager.1.worker.init.data.load(Relaxed) >> 16) & barrier::MASK == 1);
 			assert!((barrier.init.data.load(Relaxed) >> 16) & barrier::MASK == 1);
 			AtomicArc::clear(&root.children[idx]);
@@ -554,6 +556,9 @@ unsafe fn thread_work(womanager: &Womanager) {
 }
 
 fn for_each_raw_imp(n_jobs: usize, task: &(dyn Sync + Fn(usize))) {
+	if n_jobs == 0 {
+		return;
+	}
 	if n_jobs == 1 {
 		return task(0);
 	}
@@ -610,8 +615,9 @@ fn for_each_raw_imp(n_jobs: usize, task: &(dyn Sync + Fn(usize))) {
 					// threads complete their work before this scope exits and `task` is dropped.
 					// The `task` closure lives on the stack until `wait_and_clear` returns, and
 					// all workers access it only while the barrier holds them synchronized.
-					// Using transmute here is necessary because Rust 1.94+ (see rust-lang/rust#141402)
-					// forbids raw pointer casts that extend trait object lifetimes.
+					// Using transmute here is necessary because Rust 1.94+ (see
+					// rust-lang/rust#141402) forbids raw pointer casts that extend trait
+					// object lifetimes.
 					let task_ref: &(dyn Sync + Fn(usize, &AtomicPtr<PanicLoad>)) = &task;
 					let mut task: *const TaskInner = std::mem::transmute(task_ref as *const _);
 					{
@@ -712,6 +718,18 @@ mod tests {
 
 	use super::*;
 	use aligned_vec::avec;
+
+	/// Two outer jobs enter the active-worker path even with one participant.
+	/// A nested empty dispatch must not call its callback or create a zero-width child.
+	#[cfg(not(loom))]
+	#[test]
+	fn zero_jobs_are_noop() {
+		with_lock(1, || {
+			for_each_raw(2, |_| {
+				for_each_raw(0, |_| panic!("zero-job callback executed"));
+			});
+		});
+	}
 
 	#[test]
 	fn test_lock() {
